@@ -1,0 +1,51 @@
+ATM Menu:
+1. Check Balance
+2. Deposit Money
+3. Withdraw Money
+4. Exit
+Choose an option: 1
+Your current balance is: 5000.0
+
+ATM Menu:
+1. Check Balance
+2. Deposit Money
+3. Withdraw Money
+4. Exit
+Choose an option: 2
+Enter the amount to deposit: 3000
+Successfully deposited: 3000.0
+
+ATM Menu:
+1. Check Balance
+2. Deposit Money
+3. Withdraw Money
+4. Exit
+Choose an option: 1
+Your current balance is: 8000.0
+
+ATM Menu:
+1. Check Balance
+2. Deposit Money
+3. Withdraw Money
+4. Exit
+Choose an option: 3
+Enter the amount to withdraw: 500
+Successfully withdrawn: 500.0
+
+ATM Menu:
+1. Check Balance
+2. Deposit Money
+3. Withdraw Money
+4. Exit
+Choose an option: 1
+Your current balance is: 7500.0
+
+ATM Menu:
+1. Check Balance
+2. Deposit Money
+3. Withdraw Money
+4. Exit
+Choose an option: 4
+Thank you for using the ATM. Goodbye!
+
+=== Code Execution Successful ===
