@@ -1,8 +1,3 @@
-Codesoft SEPTEMBER BATCH 
-Task-1
-Write a Java program on the given requirements
-Title: Number Guessing Game
-Program:
 import java.util.Random;
 import java.util.Scanner;
 public class NumberGuessingGame {
@@ -43,29 +38,3 @@ public class NumberGuessingGame {
         }
     }
 }
-Output 
-Welcome to the Number Guessing Game!
-
-I have selected a number between 1 and 100
-
-You have 10 attempts to guess the number.
-
-Enter your guess: 80
-
-Too high! Try again
-
-Attempts remaining: 9
-
-Enter your guess: 75
-
-Too high! Try again
-
-Attempts remaining: 8
-
-Enter your guess: 70
-
-Congratulations! You guessed the correct number.
-
-
-
-=== Code Execution Successful ===
