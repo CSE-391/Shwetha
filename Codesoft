@@ -1,0 +1,71 @@
+Codesoft SEPTEMBER BATCH 
+Task-1
+Write a Java program on the given requirements
+Title: Number Guessing Game
+Program:
+import java.util.Random;
+import java.util.Scanner;
+public class NumberGuessingGame {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        Random rand = new Random();
+        int lowerBound = 1;
+        int upperBound = 100;
+        int number = rand.nextInt(upperBound - lowerBound + 1) + lowerBound;
+        int attempts = 0;
+        int maxAttempts = 10;
+        boolean hasWon = false;
+
+        System.out.println("Welcome to the Number Guessing Game!");
+        System.out.println("I have selected a number between " + lowerBound + " and " + upperBound);
+        System.out.println("You have " + maxAttempts + " attempts to guess the number.");
+
+        while (attempts < maxAttempts) {
+            System.out.print("Enter your guess: ");
+            int guess = sc.nextInt();
+            attempts++;
+
+            if (guess == number) {
+                System.out.println("Congratulations! You guessed the correct number.");
+                hasWon = true;
+                break;
+            } else if (guess < number) {
+                System.out.println("Too low! Try again");
+            } else {
+                System.out.println("Too high! Try again");
+            }
+
+            System.out.println("Attempts remaining: " + (maxAttempts - attempts));
+        }
+
+        if (!hasWon) {
+            System.out.println("You've used all your attempts. The correct number was: " + number);
+        }
+    }
+}
+Output 
+Welcome to the Number Guessing Game!
+
+I have selected a number between 1 and 100
+
+You have 10 attempts to guess the number.
+
+Enter your guess: 80
+
+Too high! Try again
+
+Attempts remaining: 9
+
+Enter your guess: 75
+
+Too high! Try again
+
+Attempts remaining: 8
+
+Enter your guess: 70
+
+Congratulations! You guessed the correct number.
+
+
+
+=== Code Execution Successful ===
