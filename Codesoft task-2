@@ -37,28 +37,3 @@ public class StudentGradeCalculator {
     }
 }
 
-output
-
-Enter the number of subjects: 6
-
-Enter marks for subject 1 (out of 100): 81
-
-Enter marks for subject 2 (out of 100): 85
-
-Enter marks for subject 3 (out of 100): 75
-
-Enter marks for subject 4 (out of 100): 88
-
-Enter marks for subject 5 (out of 100): 90
-
-Enter marks for subject 6 (out of 100): 95
-
-Total Marks: 514
-
-Average Percentage: 85.66666666666667%
-
-Grade: B
-
-
-
-=== Code Execution Successful ===
