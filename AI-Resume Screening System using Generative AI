@@ -1,0 +1,803 @@
+from sttenv import load_dotenv
+import streamlit as st
+import os
+import io
+import base64
+import pdf2image
+from PIL import Image
+import google.generativeai as genai
+import hashlib
+import re 
+import pdfplumber
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import pandas as pd
+
+# st.set_page_config(
+#     page_title="ATS Resume Expert",
+#     layout="wide"
+# ) 
+load_dotenv()
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+print("Using API key:", os.getenv("GOOGLE_API_KEY")[:5], "...")
+
+CHAT_HISTORY_FILE = "chatbot_history.txt"
+
+def load_chat_history():
+    if os.path.exists(CHAT_HISTORY_FILE):
+        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    return ""
+
+def save_chat_history(chat_text):
+    with open(CHAT_HISTORY_FILE, "a", encoding="utf-8") as f:
+        f.write(chat_text + "\n\n")
+
+# ----------------- Helper Functions -----------------
+def make_hashes(password):
+    """Hashes a password for storage"""
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def check_hashes(password, hashed_text):
+    """Checks if a given password matches the hashed one"""
+    return make_hashes(password) == hashed_text
+# ----------------- Helper Functions -----------------
+
+# Hardcoded user credentials (for demo)
+# In real-world use a database or environment variable
+users = {
+    "admin": make_hashes("admin123"),
+    "user1": make_hashes("pass123")
+}
+def set_bg_image():
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image: url("https://i.postimg.cc/SskGVLxg/9019808.jpg");
+            background-size: cover;
+            background-position: center;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    ) 
+
+def detect_experience_level(resume_text):
+    """
+    Detects candidate experience level from resume text.
+    Returns: Junior / Mid-Level / Senior
+    """
+    resume_text = resume_text.lower()
+    
+    # Search for keywords
+    if re.search(r'\b(intern|entry[-\s]?level|junior)\b', resume_text):
+        return "Junior Level"
+    elif re.search(r'\b(mid[-\s]?level|associate)\b', resume_text):
+        return "Mid Level"
+    elif re.search(r'\b(senior|lead|manager|director)\b', resume_text):
+        return "Senior Level"
+    
+    # Search for years of experience
+    years_match = re.findall(r'(\d+)\+?\s?(?:years|yrs)\s?(?:of experience)?', resume_text)
+    if years_match:
+        years = max([int(y) for y in years_match])
+        if years <= 2:
+            return "Junior Level"
+        elif 3 <= years <= 5:
+            return "Mid Level"
+        else:
+            return "Senior Level"
+
+    # Default fallback
+    return "Not specified"
+def extract_pdf_text(uploaded_file):
+    """
+    Extracts text from all pages of a PDF file.
+    """
+    uploaded_file.seek(0)
+    all_text = ""
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            if page.extract_text():
+                all_text += page.extract_text() + "\n"
+    return all_text
+# ----------------- Soft Skills Analysis -----------------
+soft_skills = [
+    "communication",
+    "leadership",
+    "teamwork",
+    "collaboration",
+    "problem-solving",
+    "adaptability",
+    "creativity",
+    "critical thinking",
+    "time management"
+]
+
+def analyze_soft_skills(resume_text):
+    """
+    Detect soft skills in a resume.
+    Returns:
+        found_skills: skills present in resume
+        missing_skills: skills absent in resume
+    """
+    resume_lower = resume_text.lower()
+    found_skills = [skill for skill in soft_skills if skill in resume_lower]
+    missing_skills = [skill for skill in soft_skills if skill not in resume_lower]
+    return found_skills, missing_skills
+
+
+# Bar chart for skills matched vs missing
+def plot_skills_match(matched_count, missing_count):
+    skills = ['Matched', 'Missing']
+    counts = [matched_count, missing_count]
+
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.bar(skills, counts, color=['green', 'red'])
+    ax.set_ylabel('Number of Skills')
+    ax.set_title('Skills Match Overview')
+    col1, col2, col3 = st.columns([1,2,1])  # middle column is bigger
+    with col2:
+       st.pyplot(fig)
+    
+
+# Gauge chart for job fit score
+def plot_job_fit_score(score_percent):
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = score_percent,
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': "Job Fit Score (%)"},
+        gauge = {'axis': {'range': [0, 100]},
+                 'bar': {'color': "green"},
+                 'steps' : [
+                     {'range': [0, 50], 'color': "red"},
+                     {'range': [50, 80], 'color': "yellow"},
+                     {'range': [80, 100], 'color': "green"}]}
+    ))
+    st.plotly_chart(fig, config={'responsive': True})
+
+# Display top missing skills
+def display_top_missing_skills(missing_skills):
+    st.subheader("⚠️ Top Missing Skills")
+    for skill in missing_skills[:5]:
+        st.write(f"- {skill}")
+def highlight_keywords(resume_text, job_desc):
+    # Define common stopwords to ignore
+    stopwords = set([
+        "and", "or", "the", "a", "an", "is", "are", "was", "were", 
+        "in", "on", "at", "for", "to", "of", "with", "by", "as", "from"
+    ])
+    # Extract words from job description
+    keywords = re.findall(r'\b\w+\b', job_desc.lower())
+    # Filter out stopwords
+    keywords = [kw for kw in keywords if kw not in stopwords]
+    resume_html = resume_text
+    for kw in set(keywords):
+        if kw.strip():
+            # Highlight keyword (case-insensitive)
+            resume_html = re.sub(f"(?i)\\b({kw})\\b", r"<mark>\1</mark>", resume_html)
+    return resume_html
+# ----------------- Fallback Responses -----------------
+def fallback_resume_analysis():
+    return """
+Professional Evaluation
+Overall Profile Alignment
+Your profile is a strong "Emerging Talent" match for this role. While the job description seeks an "experienced" engineer, your hands-on focus on Retrieval-Augmented Generation (RAG)—specifically your AI Resume Screening System and ongoing Disease Prediction project—puts you ahead of many entry-level candidates. You demonstrate the exact technical foundation (Python, Generative AI, and RAG) that the role requires.
+Strengths
+Direct RAG Experience: You are already building exactly what the role asks for: RAG-based AI applications.
+
+Core Technical Stack: Strong proficiency in Python and basic Machine Learning provides the necessary backbone for LLM implementation.
+Competitive Spirit: Reaching the final round of an Ideathon and participating in PEC Hackathons shows you can deliver under pressure and think innovatively.
+Weaknesses
+
+Experience Level: The role asks for an "experienced" engineer; as a third-year student, you will need to demonstrate that your project depth compensates for years in the industry.
+Client/Governance Exposure: The job requires attending governance meetings and client discussions. Your resume doesn't yet explicitly show experience in project management or formal client interaction.
+ 
+"""
+
+def fallback_percentage_match():
+    return """
+Match Percentage: 68%
+Keywords Missing: Vector Databases, LangChain, LLM Monitoring, API Integration (FastAPI/Flask), Cloud Deployment (AWS/Azure).
+Final Thoughts: You have the core "DNA" for this role (RAG/Python). The 32% gap is due to the "Experienced" requirement of the JD versus your current status as a student.
+Good Luck for your job
+"""
+
+def fallback_skills_improvement():
+    return """
+to bridge the gap between a student profile and an "Experienced AI Engineer," I recommend focusing on these areas:
+Technical Upskilling
+Vector Databases: Since you work with RAG, learn tools like Pinecone, Milvus, or Weaviate. This is a critical "missing link" in your current skill list.
+LLM Frameworks: Move beyond basics by mastering LangChain or LlamaIndex to build more complex pipelines.
+Deployment: Learn how to deploy your RAG models using Docker or AWS/GCP, as the role emphasizes "implementation" and "delivery".
+Soft Skills Analysis & Improvement
+Current Soft Skills: You possess strong "Problem Solving," "Communication," and "Team Collaboration".
+The Improvement: For this specific role, you must evolve "Communication" into "Stakeholder Management." Practice explaining technical RAG concepts to non-technical audiences, as this is vital for the "client discussions" mentioned in the JD
+Good Luck for your job
+"""
+def fallback_personalized_career():
+    return """ 
+    Candidate Summary: Shwetha is a forward-thinking student with a specialized focus on RAG-based AI solutions. She possesses the technical curiosity and foundational Python skills necessary for modern AI roles but needs to bridge the gap in production-level deployment and professional client handling.
+    Target Internships: Look for "AI Research Intern" or "ML Engineer Intern" roles that specifically mention LLMs. This will provide the "professional environment" experience the JD is looking for.
+Certifications: Your NASSCOM and Python certifications are great. Consider a cloud-specific AI certification (like AWS Certified Machine Learning - Specialty) to boost your "Advanced AI" credibility.
+
+Custom Advice: Course: Take the "Generative AI with Large Language Models" on Coursera.
+
+Project: Deploy your "Disease Prediction" model using Streamlit and AWS to show "Implementation" capability.
+
+Career Path Recommendation: 1. Generative AI Developer (Entry-level) 2. Junior Data Scientist (Entry-level)
+
+Good Luck for your job
+ 
+"""
+def fallback_career_chat(question):
+    return f"""
+💬 Career Advice (Demo) for your question: "{question}"
+- Based on the JD's focus on RAG and LLM applications, here are the exact certifications you should pursue:
+Recommendation 1: DeepLearning.AI "Generative AI with LLMs"
+Aligns with the JD's requirement for designing advanced AI solutions.
+Link: Coursera - Generative AI
+Recommendation 2: AWS Certified Machine Learning – Specialty
+Bridges your "Basics" from to the "Experienced" level required for design and governance.
+Link: AWS ML Certification
+Recommendation 3: LangChain & Vector Databases (Developer Certification)
+Directly supports your RAG project interests.
+Link: Pinecone Vector Education
+Good Luck for your job 🚀
+"""
+
+def safe_gemini_call(prompt_parts, cache_key=None, mode="resume_analysis"):
+
+    if "gemini_cache" not in st.session_state:
+        st.session_state.gemini_cache = {}
+
+    if cache_key and cache_key in st.session_state.gemini_cache:
+        return st.session_state.gemini_cache[cache_key]
+
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        # ✅ Combine all parts into a single string
+        full_prompt = "\n".join([str(p) for p in prompt_parts])
+        response = model.generate_content(full_prompt)
+        text = response.text if hasattr(response, "text") else str(response)
+
+        if cache_key:
+            st.session_state.gemini_cache[cache_key] = text
+        st.session_state.gemini_offline = False 
+        return text
+
+
+    except Exception as e:
+        st.session_state.gemini_offline = True
+         
+        if mode == "resume_analysis":
+            return fallback_resume_analysis()
+        elif mode == "skills_improvement":
+            return fallback_skills_improvement()
+        elif mode == "percentage_match":
+            return fallback_percentage_match()
+        elif mode == "personalized_career":
+             return fallback_resume_analysis()
+        elif mode == "career_chat":
+            return fallback_career_chat("Your question")  # can replace with real question
+        else:
+            return "⚠️ Gemini offline - response not available"
+       
+
+
+# ----------------- Gemini Response -----------------
+def get_gemini_response(prompt, resume_text, job_description):
+    cache_key = hashlib.sha256(
+        f"{prompt}|{resume_text}|{job_description}".encode()
+    ).hexdigest()
+
+    return safe_gemini_call(
+        [prompt, resume_text, job_description],
+        cache_key=cache_key
+    )
+# ----------------- Centralized Gemini Call -----------------
+def get_or_create_ai_response(prompt_to_use, pdf_content, input_text):
+    """
+    Calls Gemini once per resume + job description.
+    Reuses the response from session_state to avoid extra API calls.
+    """
+    if "ai_response" not in st.session_state:
+        st.session_state.ai_response = None
+
+
+    if st.session_state.ai_response is None:
+        st.session_state.ai_response = get_gemini_response(
+            prompt_to_use, pdf_content, input_text
+        )
+    if st.session_state.get("gemini_offline"):
+     st.warning("⚠️ Gemini API fallback activated (offline).")
+
+
+
+
+input_prompt1="""You are an experienced HR With Tech Experience in the field of any one job role from Data Science,Full Stack,Web development,
+Big Data Engineering,DEVOPS,Data Analyst,your task is to review the provided resume against the job description only only if input text was invalid job description then give less than 20 % else 
+Please share your professional evaluation on whether the candidate's profile aligns with
+Highlight the strengths and weakness of the application in relation to the specified job role end with the statement Good Luck for your job"""
+
+input_prompt2="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role Data Science,
+Web Development,Big Data Engineering,DEVOPS,Data Analyst and deep ATS functionality,your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else findout the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt3="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role Data Science,
+Web Development,Big Data Engineering,DEVOPS,Data Analyst and deep ATS functionality,your task is to evaluate the
+resume against the provided job description only. give me the percentage of match if the resume matches the job description if the resume dosent match give percentage match less than 20. 
+First the output should come if input text was invalid job description then give less than 20 % else give proper percentage and then keywords missing should come as percentage and then keywords missing and last final thoughts and end with the statement Good luck for your job
+"""
+input_prompt4 = """You are an experienced HR and AI expert specializing in emerging job roles such as Prompt Engineering,
+AI Ethics, MLOps, Generative AI Product Design, and Cloud Automation.
+Your task is to analyze resumes and evaluate how well they align with these modern AI-driven roles.
+Share your evaluation highlighting new-age tech skills, adaptability, and AI readiness of the candidate.
+End with the statement: Good Luck for your job."""
+
+input_prompt5="""You are an experienced HR With Tech Experience in the field of emerging AI roles like Prompt Engineering, Generative AI Development,
+AI Product Management, and AI Ethics Research. Your task is to review the provided resume against the job description only.
+If input text was invalid job description then give less than 20% else please share your professional evaluation on whether the candidate's profile aligns with the AI-driven job role.
+Highlight strengths and weaknesses of the application in relation to creativity, model understanding, and prompt-building ability. 
+End with the statement Good Luck for your job"""
+
+input_prompt6="""You are a skilled ATS (Application Tracking System) scanner with deep understanding of Cloud Computing, DevOps, MLOps, and Automation Engineering.
+Your task is to evaluate the resume against the provided job description.
+Only if input text was invalid job description then give less than 20% else identify cloud platforms, automation tools, and CI/CD skills that were missing.
+Give suggestions to learn those tools like AWS, Azure, Docker, Kubernetes, Terraform, Jenkins, and GitHub Actions.
+End with the statement Good Luck for ur job"""
+
+input_prompt7="""You are an experienced HR With Tech Experience in the field of Cybersecurity, Ethical Hacking, Cloud Security, and Data Privacy.
+Your task is to review the provided resume against the job description.
+Only if input text was invalid job description then give less than 20% else evaluate the candidate’s readiness in cybersecurity awareness, incident response, risk management, and compliance frameworks.
+Highlight missing certifications or skills such as CompTIA Security+, CEH, or SOC tools.
+End with the statement Good Luck for your job"""
+
+input_prompt8="""You are a skilled ATS scanner with deep understanding of Data Analytics, Business Intelligence, Machine Learning, and Data Visualization.
+Your task is to evaluate the resume against the provided job description.
+Only if input text was invalid job description then give less than 20% else evaluate the strength of data interpretation, storytelling with data, and tool proficiency like Power BI, Tableau, or Python visualization.
+End with the statement Good Luck for ur job"""
+
+input_prompt9="""You are an experienced HR With Tech Experience in the field of Sustainability Tech, Climate Data Science, and AI for Good applications.
+Your task is to review the provided resume against the job description.
+Only if input text was invalid job description then give less than 20% else share your professional evaluation on how the candidate’s profile aligns with responsible AI, environmental data, and clean tech innovation.
+Highlight missing sustainability or ethical AI knowledge areas.
+End with the statement Good Luck for your job"""
+
+input_prompt10="""You are a skilled ATS scanner with deep understanding of Product Management, AI Product Strategy, and Technical Program Management.
+Your task is to evaluate the resume against the provided job description.
+Only if input text was invalid job description then give less than 20% else find out leadership, planning, communication, and AI integration skills that are missing.
+Give short suggestions to learn agile methods, product analytics, and cross-functional collaboration.
+End with the statement Good Luck for ur job"""
+
+input_prompt11="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role XR Developer,
+AR/VR Developer, Metaverse Developer, Unity Developer, Unreal Engine Developer and deep ATS functionality, your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else find out the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt12="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role Quantum Computing Engineer,
+Quantum Algorithm Developer, Qiskit Developer, Cirq Developer and deep ATS functionality, your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else find out the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt13="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role AI Ethics Specialist,
+Responsible AI Researcher, AI Policy Analyst, Bias Mitigation Specialist and deep ATS functionality, your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else find out the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt14="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role Edge AI Engineer,
+TinyML Developer, IoT AI Developer, Embedded AI Specialist and deep ATS functionality, your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else find out the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt15="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role Blockchain Developer,
+Web3 Developer, Solidity Developer, Smart Contract Engineer and deep ATS functionality, your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else find out the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt16="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role Robotics Engineer,
+Automation Engineer, ROS Developer, Industrial Robotics Specialist and deep ATS functionality, your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else find out the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt17="""You are skilled ATS(Application Tracking System) scanner with deep understanding of any one job role Smart Manufacturing Engineer,
+Cyber-Physical Systems Developer, IIoT Engineer, Predictive Maintenance Specialist and deep ATS functionality, your task is to evaluate the
+resume against the provided job description only if input text was invalid job description then give less than 20 % else find out the skills that were not matched with the job description and give suggestions
+to learn those missing skills end with the statement Good Luck for ur job"""
+
+input_prompt_personalization = """
+You are an advanced ATS + Career Coach AI.
+
+Analyze the resume against the job description and generate:
+
+1. Candidate Summary:
+- 3–4 lines
+- Professional tone
+- Clearly mention key strengths and weaknesses
+
+2. Custom Advice:
+- Suggest next courses, certifications, or projects
+- Keep it practical and actionable
+- Mention platforms like Coursera, Udemy, Google, AWS, or GitHub projects
+
+3. Career Path Recommendation:
+- Suggest 2–3 suitable job roles
+- Base it on current skills and experience level
+- Mention whether roles are Entry-level / Mid-level
+
+Format strictly as:
+Candidate Summary:
+Custom Advice:
+Career Path Recommendation:
+
+End with: Good Luck for your job
+"""
+ 
+# ----------------- Gemini Response -----------------
+def get_personalized_insights(pdf_content, job_description):
+    cache_key = hashlib.sha256(
+        f"personalized|{pdf_content}|{job_description}".encode()
+    ).hexdigest()
+    if "gemini_cache" not in st.session_state:
+       st.session_state.gemini_cache = {}
+
+    # Check cache first
+    if cache_key in st.session_state.gemini_cache:
+        return st.session_state.gemini_cache[cache_key]
+
+
+    response_text = safe_gemini_call(
+        [input_prompt_personalization, pdf_content, job_description],
+        cache_key=cache_key
+    )
+    st.session_state.gemini_cache[cache_key] = response_text
+    if "Offline Intelligence" in response_text:
+        st.warning("⚠️ Gemini API fallback activated (offline).")
+
+    return response_text
+
+  
+def select_prompt(job_description):
+    """
+    Detect the job role from the job description and return the corresponding prompt.
+    Fallback to input_prompt1 if no role detected.
+    """
+
+    job_roles_map = {
+        "data science": input_prompt1,
+        "full stack": input_prompt1,
+        "web development": input_prompt1,
+        "big data": input_prompt1,
+        "devops": input_prompt1,
+        "data analyst": input_prompt1,
+
+        "ai": input_prompt4,
+        "prompt engineering": input_prompt5,
+        "cloud": input_prompt6,
+        "cybersecurity": input_prompt7,
+        "data analytics": input_prompt8,
+        "sustainability": input_prompt9,
+        "product management": input_prompt10,
+        "xr": input_prompt11,
+        "quantum": input_prompt12,
+        "ai ethics": input_prompt13,
+        "edge ai": input_prompt14,
+        "blockchain": input_prompt15,
+        "robotics": input_prompt16,
+        "smart manufacturing": input_prompt17
+    }
+
+    job_description_lower = job_description.lower()
+
+    for key, prompt in job_roles_map.items():
+        if key in job_description_lower:
+            return prompt
+
+    return input_prompt1
+ 
+
+# ----------------- Login Page -----------------
+def login_page():
+    set_bg_image()
+    
+    st.image("https://i.postimg.cc/26HCtdnz/login.png", width=120)
+    st.title(" Login ")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type='password')
+    login_button = st.button("Login")
+
+    if login_button:
+        if username in users and check_hashes(password, users[username]):
+            st.session_state["logged_in"] = True
+            st.session_state["username"] = username
+            st.success(f"Welcome, {username} 👋")
+            st.rerun()  # <-- Add this line
+        else:
+            st.error("Incorrect Username or Password")
+   
+   
+def ats_app():
+    matched_count = 0
+    missing_skills = []
+    match_percent = 0
+    response = ""
+    match_percent = 0
+    set_bg_image()
+    if "gemini_offline" not in st.session_state:
+     st.session_state.gemini_offline = False
+    if "ai_response" not in st.session_state:
+      st.session_state.ai_response = None
+    # ----- TEST GEMINI LIVE CALL -----
+    st.subheader("🔹 Gemini API Live Test")
+     
+
+
+# ---------------------------------
+
+
+# Centered header with custom font style
+    st.markdown("""
+    <h2 style='text-align: center; font-family: "serif", monospace; color: #1f77b4;'>
+    AI Resume Generative Analyzer
+    </h2>
+    """, unsafe_allow_html=True)
+    chat_container = st.container()
+
+    input_text = st.text_area("Job Description", key="input")
+    uploaded_file = st.file_uploader("Upload your resume (PDF)", type=["pdf"],)
+    if uploaded_file:
+        prompt_test = "Hello from Gemini"
+        response_text = safe_gemini_call([prompt_test], cache_key="gemini_test")
+        st.success("✅ Gemini Live Response received!")
+        st.write(response_text)
+ 
+    if uploaded_file is not None:
+        st.success("Your Document is ready for analysis")
+        pdf_content = extract_pdf_text(uploaded_file)  # Extract full PDF text
+        experience_level = detect_experience_level(pdf_content)
+        st.info(f" Detected Experience Level: *{experience_level}*")
+        if input_text.strip():
+          st.subheader("Resume with Highlighted Keywords")
+          highlighted_resume = highlight_keywords(pdf_content, input_text)
+          st.markdown(highlighted_resume, unsafe_allow_html=True)
+  
+
+    submit1 = st.button("Tell Me About the Resume")
+    submit2 = st.button("How can I Improvise my Skills")
+    submit3 = st.button("Percentage match")
+    submit4 = st.button(" Personalized Career Guidance")
+      
+
+    if submit1:
+      if uploaded_file and len(input_text) > 50:
+        pdf_content = extract_pdf_text(uploaded_file)
+        prompt_to_use = select_prompt(input_text)
+        response = safe_gemini_call(
+            [prompt_to_use, pdf_content, input_text],
+            cache_key="resume_analysis",
+            mode="resume_analysis"
+        )
+        st.subheader("📄 Resume Analysis")
+        st.write(response)
+        found_soft, missing_soft = analyze_soft_skills(pdf_content)
+        st.subheader("Soft Skills Analysis")
+        st.write(
+        "**Found in Resume:**",
+        ", ".join(found_soft) if found_soft else "None")
+        st.write(
+        "**Missing Soft Skills:**",", ".join(missing_soft) if missing_soft else "None")
+     
+
+        chat_entry = f"User ({st.session_state['username']}): {input_text}\nAI: {response}"
+        save_chat_history(chat_entry)
+      else:
+        st.warning("Please upload proper resume and job description")
+
+
+    elif submit2:
+      if uploaded_file and len(input_text) > 50:
+        pdf_content = extract_pdf_text(uploaded_file)
+        prompt_to_use = select_prompt(input_text)
+        response = safe_gemini_call(
+            [prompt_to_use, pdf_content, input_text],
+            cache_key="skills_improvement",
+            mode="skills_improvement"
+        )
+
+        st.subheader("🛠 Skills Improvement")
+        st.write(response)
+        
+        chat_entry = f"User ({st.session_state['username']}): {input_text}\nAI: {response}"
+        save_chat_history(chat_entry)
+      else:
+        st.warning("Please upload proper resume and job description")
+
+
+    elif submit3:
+      if uploaded_file and len(input_text) > 50:
+        if "ai_response" not in st.session_state:
+            st.session_state.ai_response = None
+ 
+        pdf_content = extract_pdf_text(uploaded_file)
+        prompt_to_use = select_prompt(input_text)
+        response = safe_gemini_call(
+            [prompt_to_use, pdf_content, input_text],
+            cache_key="percentage_match",
+            mode="percentage_match"
+        )
+ 
+
+        st.subheader("📊 Percentage Match")
+        st.write(response)
+        match_percent_match = re.search(r'Match Percentage[:\s]+(\d+)', response)
+        match_percent = int(match_percent_match.group(1)) if match_percent_match else 0
+        missing_skills_match = re.findall(
+         r'(?:Missing Skills|Keywords Missing|Skills to learn|Not found skills)[:\s]*(.*)',response,re.IGNORECASE)
+        missing_skills = []
+        for item in missing_skills_match:
+            skills = re.split(r',|\n', item)
+            missing_skills.extend([x.strip() for x in skills if x.strip()])
+         
+
+        total_expected_skills = len(missing_skills) + 5  # assume baseline skills
+        matched_count = max(1, total_expected_skills - len(missing_skills))
+        missing_count = len(missing_skills)
+
+        # matched_count = int(match_percent / 100 * (len(missing_skills) + 1))
+        # missing_count = len(missing_skills)
+        plot_skills_match(matched_count, missing_count)
+        plot_job_fit_score(match_percent)
+        display_top_missing_skills(missing_skills)
+        # Save chat
+        chat_entry = f"User ({st.session_state['username']}): {input_text}\nAI: {response}"
+        save_chat_history(chat_entry)
+     
+      else:
+        st.warning("Please upload proper resume and job description")
+    elif submit4:
+      if uploaded_file and len(input_text) > 50:
+        with st.spinner("Generating personalized career guidance..."):
+            pdf_content = extract_pdf_text(uploaded_file)
+
+            personalized_response = safe_gemini_call(
+            [input_prompt_personalization, pdf_content, input_text],
+            cache_key="personalized_career",
+            mode="personalized_career"
+        )
+
+        st.subheader("🧑‍💼 Candidate Summary")
+        st.markdown(personalized_response)
+
+        # Save chat history
+        chat_entry = f"""
+       User ({st.session_state['username']}): Personalized Career Guidance
+       {personalized_response}
+--------------------------------------------------
+"""   
+        save_chat_history(chat_entry)
+# ===== Download ATS Analysis (CSV) =====
+
+        st.markdown("### ⬇ Download Personalized Report")
+
+        data = {
+            "Match Percentage": [match_percent],
+            "Matched Skills Count": [matched_count],
+            "Missing Skills": [", ".join(missing_skills)]
+        }
+
+        df = pd.DataFrame({
+    "Section": ["Personalized Career Guidance"],
+    "Content": [personalized_response]
+})
+
+        st.download_button(
+            label="⬇ Download Career Guidance (CSV)",
+            data=df.to_csv(index=False),
+            file_name="ats_analysis.csv",
+            mime="text/csv"
+        )
+
+    
+      else:
+         st.warning(" Please upload a resume and enter a valid job description.")
+         st.markdown("## 💬 Career Chat")
+
+    user_question = st.text_input("Ask a career-related question")
+    chat_submit = st.button("Ask AI")
+
+    ai_text = ""   # ✅ define first
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    if chat_submit:
+        if uploaded_file and user_question.strip() != "":
+            with st.spinner("Thinking..."):
+               pdf_content = extract_pdf_text(uploaded_file)
+               chat_prompt = f"""
+               You are a career mentor AI.
+               Use the candidate's resume and answer the question clearly.
+               Candidate Resume:
+               {pdf_content}
+
+               User Question:
+               {user_question}
+               Instructions for AI:
+               1. Identify the exact skills, courses, or certifications the user should pursue.
+               2. Provide **at least 2–3 actionable links** for each recommendation.
+                 - Prefer free or widely accessible platforms (Coursera, Udemy, Google, AWS, GitHub).
+               3. Format the answer as:
+                 - **Recommendation 1:** Skill/Certification - Link1, Link2
+                 - **Recommendation 2:** Skill/Certification - Link1, Link2
+               4. Keep it concise, actionable, and practical.
+               5. End with: Good Luck for your job. 
+               """
+               chat_cache_key = hashlib.sha256(
+               f"chat|{pdf_content}|{user_question}".encode() ).hexdigest()
+               ai_text = safe_gemini_call(
+    [chat_prompt],
+    cache_key=chat_cache_key,
+    mode="career_chat"
+)
+            st.session_state.chat_history.append(("You", user_question))
+            if "429" in ai_text or "ResourceExhausted" in ai_text or "Quota exceeded" in ai_text:
+                st.session_state.chat_history.append(("AI", "⚠️ Free-tier Gemini API quota exceeded. Please try again later."))
+            else:
+                st.session_state.chat_history.append(("AI", ai_text))
+
+    for sender, message in st.session_state.chat_history:
+        if sender == "You":
+            st.markdown(f"**You:** {message}")
+        else:
+            st.markdown(f"**🤖 AI:** {message}")
+            # if hasattr(response, "text"):
+            #     ai_text = response.text
+            # else:
+            #     ai_text = str(response)
+
+    else:
+     st.warning(" Upload resume and ask a valid question.")
+
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("Show Chat History"):
+            chat_history = load_chat_history()
+            if chat_history:
+                st.subheader(" Previous Analysis")
+                st.text_area("Chat History", value=chat_history, height=300, disabled=True)
+            else:
+                st.info("No previous chat history found.")
+    with col2:
+        if st.button("Download Chat History"):
+            chat_history = load_chat_history()
+            if chat_history:
+                chat_bytes = chat_history.encode('utf-8')
+                st.download_button(
+                    label="Download History as TXT",
+                    data=chat_bytes,
+                    file_name="chat_history.txt",
+                    mime="text/plain"
+                )
+            else:
+                st.info("No chat history to download.")
+    with col3:
+        if st.button("Logout"):
+            st.session_state["logged_in"] = False
+            st.rerun()
+    
+def main():
+    if "logged_in" not in st.session_state:
+        st.session_state["logged_in"] = False
+
+    if not st.session_state["logged_in"]:
+        login_page()
+    else:
+        ats_app()
+
+if __name__ == "__main__":
+    main()
